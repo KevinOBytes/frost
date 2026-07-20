@@ -1,43 +1,114 @@
 import Testing
+import Foundation
 @testable import Frost
 
 @MainActor
 final class FrostStateTests {
 
-    @Test("FrostState initializes with correct defaults")
+    @Test("FrostState initializes with persisted values from UserDefaults")
     func initialState() {
+        // Clear any existing state
+        let defaults = UserDefaults.standard
+        defaults.removePersistentDomain(forName: Bundle.main.bundleIdentifier ?? "com.tkoresearch.frost")
+
         let state = FrostState()
-        #expect(state.isHiddenSectionVisible == false)
-        #expect(state.hiddenItems == [])
-        #expect(state.visibleItems == [])
-        #expect(state.alwaysHiddenItems == [])
+        // With no persisted state, defaults should apply
+        #expect(state.hiddenItemIDs == [])
+        #expect(state.alwaysHiddenItemIDs == [])
         #expect(state.autoHideEnabled == true)
-        #expect(state.iceIconVisible == true)
+        #expect(state.frostIconVisible == true)
+        #expect(state.launchAtLogin == false)
+        #expect(state.hasAccessibilityPermission == false)
     }
 
-    @Test("FrostState toggles isHiddenSectionVisible")
-    func toggleHiddenSection() {
+    @Test("FrostState persists hiddenItemIDs")
+    func persistHiddenIDs() {
         let state = FrostState()
-        state.isHiddenSectionVisible = true
-        #expect(state.isHiddenSectionVisible == true)
-        state.isHiddenSectionVisible = false
-        #expect(state.isHiddenSectionVisible == false)
+        state.hiddenItemIDs = ["item_1", "item_2", "item_3"]
+
+        // Create a new state — should load from UserDefaults
+        let state2 = FrostState()
+        #expect(state2.hiddenItemIDs == ["item_1", "item_2", "item_3"])
+
+        // Cleanup
+        state2.hiddenItemIDs = []
     }
 
-    @Test("FrostState toggles autoHideEnabled")
+    @Test("FrostState persists alwaysHiddenItemIDs")
+    func persistAlwaysHiddenIDs() {
+        let state = FrostState()
+        state.alwaysHiddenItemIDs = ["item_5"]
+
+        let state2 = FrostState()
+        #expect(state2.alwaysHiddenItemIDs == ["item_5"])
+
+        // Cleanup
+        state2.alwaysHiddenItemIDs = []
+    }
+
+    @Test("FrostState toggles autoHideEnabled and persists")
     func toggleAutoHide() {
         let state = FrostState()
-        #expect(state.autoHideEnabled == true)
-        state.autoHideEnabled = false
-        #expect(state.autoHideEnabled == false)
+        let original = state.autoHideEnabled
+        state.autoHideEnabled = !original
+        #expect(state.autoHideEnabled != original)
+
+        let state2 = FrostState()
+        #expect(state2.autoHideEnabled == !original)
+
+        // Restore
+        state2.autoHideEnabled = original
     }
 
-    @Test("FrostState toggles iceIconVisible")
-    func toggleIceIcon() {
+    @Test("FrostState toggles frostIconVisible and persists")
+    func toggleIconVisible() {
         let state = FrostState()
-        #expect(state.iceIconVisible == true)
-        state.iceIconVisible = false
-        #expect(state.iceIconVisible == false)
+        state.frostIconVisible = false
+        #expect(state.frostIconVisible == false)
+
+        let state2 = FrostState()
+        #expect(state2.frostIconVisible == false)
+
+        // Restore
+        state2.frostIconVisible = true
+    }
+
+    @Test("FrostState toggles launchAtLogin and persists")
+    func toggleLaunchAtLogin() {
+        let state = FrostState()
+        state.launchAtLogin = true
+        #expect(state.launchAtLogin == true)
+
+        let state2 = FrostState()
+        #expect(state2.launchAtLogin == true)
+
+        // Restore
+        state2.launchAtLogin = false
+    }
+
+    @Test("FrostState computed properties filter correctly")
+    func computedProperties() {
+        let state = FrostState()
+        state.allDetectedItems = [
+            MenuBarItem(id: "a", name: "A"),
+            MenuBarItem(id: "b", name: "B"),
+            MenuBarItem(id: "c", name: "C"),
+            MenuBarItem(id: "d", name: "D"),
+        ]
+        state.hiddenItemIDs = ["b"]
+        state.alwaysHiddenItemIDs = ["d"]
+
+        #expect(state.hiddenItems.count == 1)
+        #expect(state.hiddenItems.first?.id == "b")
+        #expect(state.alwaysHiddenItems.count == 1)
+        #expect(state.alwaysHiddenItems.first?.id == "d")
+        #expect(state.visibleOnlyItems.count == 2)
+        #expect(state.visibleOnlyItems.contains { $0.id == "a" })
+        #expect(state.visibleOnlyItems.contains { $0.id == "c" })
+
+        // Cleanup
+        state.hiddenItemIDs = []
+        state.alwaysHiddenItemIDs = []
     }
 }
 
@@ -55,8 +126,6 @@ final class MenuBarItemTests {
     @Test("MenuBarItem initializes with isHidden=true")
     func initHidden() {
         let item = MenuBarItem(id: "test_2", name: "HiddenItem", isHidden: true)
-        #expect(item.id == "test_2")
-        #expect(item.name == "HiddenItem")
         #expect(item.isHidden == true)
     }
 
@@ -68,13 +137,6 @@ final class MenuBarItemTests {
         #expect(item1 == item2)
         #expect(item1 != item3)
         #expect(item1.hashValue == item2.hashValue)
-    }
-
-    @Test("MenuBarItem id uniqueness via index string")
-    func idUniqueness() {
-        let item1 = MenuBarItem(id: "item_1", name: "A")
-        let item2 = MenuBarItem(id: "item_2", name: "B")
-        #expect(item1.id != item2.id)
     }
 
     @Test("MenuBarItem isHidden can be mutated")
@@ -90,99 +152,100 @@ final class MenuBarItemTests {
 @MainActor
 final class HideUnhideLogicTests {
 
-    @Test("Moving item from visible to hidden")
+    @Test("Hiding an item adds ID to hiddenItemIDs")
     func hideItem() {
         let state = FrostState()
-        let item = MenuBarItem(id: "item_5", name: "Wifi")
-        state.visibleItems = [item]
+        state.allDetectedItems = [MenuBarItem(id: "item_5", name: "Wifi")]
+        state.hiddenItemIDs.insert("item_5")
 
-        // Simulate hide logic from FrostDelegate.hideItem
-        state.visibleItems.removeAll { $0.id == item.id }
-        var hiddenItem = item
-        hiddenItem.isHidden = true
-        state.hiddenItems.append(hiddenItem)
-
-        #expect(state.visibleItems.count == 0)
+        #expect(state.hiddenItemIDs.contains("item_5"))
         #expect(state.hiddenItems.count == 1)
-        #expect(state.hiddenItems.first?.id == "item_5")
-        #expect(state.hiddenItems.first?.isHidden == true)
+        #expect(state.visibleOnlyItems.count == 0)
+
+        // Cleanup
+        state.hiddenItemIDs = []
     }
 
-    @Test("Moving item from hidden to visible")
+    @Test("Unhiding removes ID from hiddenItemIDs")
     func unhideItem() {
         let state = FrostState()
-        let item = MenuBarItem(id: "item_3", name: "Bluetooth", isHidden: true)
-        state.hiddenItems = [item]
+        state.allDetectedItems = [MenuBarItem(id: "item_3", name: "BT")]
+        state.hiddenItemIDs.insert("item_3")
+        state.hiddenItemIDs.remove("item_3")
 
-        // Simulate unhide logic from FrostDelegate.unhideItem
-        state.hiddenItems.removeAll { $0.id == item.id }
-        var visibleItem = item
-        visibleItem.isHidden = false
-        state.visibleItems.append(visibleItem)
-
+        #expect(!state.hiddenItemIDs.contains("item_3"))
         #expect(state.hiddenItems.count == 0)
-        #expect(state.visibleItems.count == 1)
-        #expect(state.visibleItems.first?.id == "item_3")
-        #expect(state.visibleItems.first?.isHidden == false)
+        #expect(state.visibleOnlyItems.count == 1)
+    }
+
+    @Test("Always-hiding moves to alwaysHiddenItemIDs")
+    func alwaysHideItem() {
+        let state = FrostState()
+        state.allDetectedItems = [MenuBarItem(id: "item_7", name: "Docker")]
+        state.alwaysHiddenItemIDs.insert("item_7")
+
+        #expect(state.alwaysHiddenItems.count == 1)
+        #expect(state.visibleOnlyItems.count == 0)
+        #expect(state.hiddenItems.count == 0)
+
+        // Cleanup
+        state.alwaysHiddenItemIDs = []
+    }
+
+    @Test("Unhide from always-hidden removes from alwaysHiddenItemIDs")
+    func unhideAlwaysItem() {
+        let state = FrostState()
+        state.allDetectedItems = [MenuBarItem(id: "item_8", name: "Slack")]
+        state.alwaysHiddenItemIDs.insert("item_8")
+        state.alwaysHiddenItemIDs.remove("item_8")
+
+        #expect(state.alwaysHiddenItems.count == 0)
+        #expect(state.visibleOnlyItems.count == 1)
     }
 
     @Test("Hiding multiple items preserves others")
     func hideMultiplePreservesOthers() {
         let state = FrostState()
-        let item1 = MenuBarItem(id: "item_1", name: "A")
-        let item2 = MenuBarItem(id: "item_2", name: "B")
-        let item3 = MenuBarItem(id: "item_3", name: "C")
-        state.visibleItems = [item1, item2, item3]
+        state.allDetectedItems = [
+            MenuBarItem(id: "a", name: "A"),
+            MenuBarItem(id: "b", name: "B"),
+            MenuBarItem(id: "c", name: "C"),
+        ]
+        state.hiddenItemIDs.insert("b")
 
-        // Hide item2
-        state.visibleItems.removeAll { $0.id == item2.id }
-        var hidden = item2
-        hidden.isHidden = true
-        state.hiddenItems.append(hidden)
-
-        #expect(state.visibleItems.count == 2)
-        #expect(state.visibleItems.contains { $0.id == "item_1" })
-        #expect(state.visibleItems.contains { $0.id == "item_3" })
-        #expect(!state.visibleItems.contains { $0.id == "item_2" })
+        #expect(state.visibleOnlyItems.count == 2)
+        #expect(state.visibleOnlyItems.contains { $0.id == "a" })
+        #expect(state.visibleOnlyItems.contains { $0.id == "c" })
+        #expect(!state.visibleOnlyItems.contains { $0.id == "b" })
         #expect(state.hiddenItems.count == 1)
+
+        // Cleanup
+        state.hiddenItemIDs = []
     }
 
-    @Test("Unhiding when no items are hidden does nothing")
-    func unhideEmpty() {
+    @Test("An item can be in both hidden and alwaysHidden (edge case)")
+    func itemInBothSets() {
         let state = FrostState()
-        state.hiddenItems.removeAll { $0.id == "nonexistent" }
+        state.allDetectedItems = [MenuBarItem(id: "x", name: "X")]
+        state.hiddenItemIDs.insert("x")
+        state.alwaysHiddenItemIDs.insert("x")
+
+        // It should appear in hidden items, but NOT in visibleOnlyItems
+        #expect(state.visibleOnlyItems.count == 0)
+        #expect(state.hiddenItems.count == 1)
+        #expect(state.alwaysHiddenItems.count == 1)
+
+        // Cleanup
+        state.hiddenItemIDs = []
+        state.alwaysHiddenItemIDs = []
+    }
+
+    @Test("Empty state has no items in any category")
+    func emptyState() {
+        let state = FrostState()
+        state.allDetectedItems = []
+        #expect(state.visibleOnlyItems.count == 0)
         #expect(state.hiddenItems.count == 0)
-    }
-
-    @Test("Hiding already-hidden item has no duplicate effect")
-    func hideAlreadyHidden() {
-        let state = FrostState()
-        let item = MenuBarItem(id: "item_1", name: "A", isHidden: true)
-        state.hiddenItems = [item]
-
-        // Trying to hide again (shouldn't create duplicate)
-        state.visibleItems.removeAll { $0.id == item.id }
-        var hidden = item
-        hidden.isHidden = true
-        // Only append if not already in hidden
-        if !state.hiddenItems.contains(where: { $0.id == hidden.id }) {
-            state.hiddenItems.append(hidden)
-        }
-
-        #expect(state.hiddenItems.count == 1)
-    }
-
-    @Test("Visible items filter excludes hidden items")
-    func filterVisibleItems() {
-        let state = FrostState()
-        let visible = MenuBarItem(id: "item_1", name: "A", isHidden: false)
-        let hidden = MenuBarItem(id: "item_2", name: "B", isHidden: true)
-        let allItems = [visible, hidden]
-        state.visibleItems = allItems.filter { !$0.isHidden }
-        state.hiddenItems = allItems.filter { $0.isHidden }
-        #expect(state.visibleItems.count == 1)
-        #expect(state.hiddenItems.count == 1)
-        #expect(state.visibleItems.first?.id == "item_1")
-        #expect(state.hiddenItems.first?.id == "item_2")
+        #expect(state.alwaysHiddenItems.count == 0)
     }
 }

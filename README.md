@@ -10,14 +10,27 @@ Ice hasn't been updated since October 2024 and crashes on macOS Tahoe. Bartender
 
 ## Features
 
+### v1.1.0
+
+- **Physical menu bar hiding** — Uses the "wide item push" technique: creates an extremely wide NSStatusItem that pushes items to its left off-screen. No private APIs — 100% public AppKit.
+- **Persistent state** — Hidden/always-hidden item IDs saved to UserDefaults. Your hide/show configuration survives restarts.
+- **Launch at login** — Toggle via Settings or menu. Uses SMAppService (macOS 13+).
+- **Accessibility permission detection** — Checks on launch, shows a prompt with deep-link to System Settings. Monitors for permission changes automatically.
+- **App icon** — Custom snowflake icon generated programmatically as .icns, integrated into the .app bundle.
+- **Three-section model** — Visible, Hidden, and Always Hidden sections (like Ice/Bartender).
+- **Tabbed settings window** — General, Items, and About tabs.
 - **Menu bar item detection** via the Accessibility API (AXUIElement)
-- **Hide/unhide items** from the Frost dropdown menu
-- **Hidden section toggle** with a chevron icon in the menu bar
-- **Always-hidden section** for items you never want to see
-- **Settings window** with toggle controls and item lists
 - **Auto-hide polling** every 2 seconds to detect new menu bar items
 - **Snowflake icon** drawn programmatically (no asset dependencies)
 - **Accessory activation policy** (no dock icon, no app in app switcher)
+
+### v1.0.0
+
+- Menu bar item detection via Accessibility API
+- Hide/unhide items from dropdown menu
+- Hidden section toggle with chevron icon
+- SwiftUI settings window
+- 15 unit tests passing
 
 ## Requirements
 
@@ -34,7 +47,7 @@ Ice hasn't been updated since October 2024 and crashes on macOS Tahoe. Bartender
 3. Launch Frost
 4. Grant Accessibility permission when prompted:
    - System Settings > Privacy & Security > Accessibility
-   - Add Frost (navigate to `/Applications/Frost.app`)
+   - Add Frost (or toggle it on)
 
 ### Option 2: Build from Source
 
@@ -58,32 +71,53 @@ cd frost
 ./scripts/build-app.sh
 ```
 
-This produces `Frost.app` in the `build/` directory, which you can drag to `/Applications/`.
+This produces `Frost.app` in the `build/` directory with a custom icon, which you can drag to `/Applications/`.
 
 ## Usage
 
 | Action | How |
 |--------|-----|
 | Open Frost menu | Click the snowflake icon in the menu bar |
-| Hide an item | Frost menu > Visible Items > click item name |
-| Unhide an item | Frost menu > Hidden Items > click item name, OR click the chevron icon |
+| Hide an item | Frost menu > hover item name > "Hide" |
+| Always hide an item | Frost menu > hover item name > "Always Hide" |
+| Unhide an item | Frost menu > Hidden section > click item name |
+| Toggle hidden section | Click the chevron icon next to snowflake |
 | Open Settings | Frost menu > Settings... |
 | Toggle auto-hide | Frost menu > Auto-hide enabled |
+| Launch at login | Frost menu > Launch at Login, or Settings > General |
 | Quit | Frost menu > Quit Frost (Cmd+Q) |
 
 ## How It Works
 
+### Physical Hiding (Push Technique)
+
 Frost uses three `NSStatusItem` instances:
 
 1. **Main status item** (snowflake icon) — dropdown menu with item management
-2. **Hidden section control** (left chevron) — toggle to show/hide the hidden section popover
-3. **Always-hidden control** (left chevron) — for items permanently hidden
+2. **Hidden section control** (left chevron) — when collapsed, expands to 10,000pt width, pushing all items to its left off-screen
+3. **Always-hidden control** (left chevron) — same technique for always-hidden items
 
-Menu bar items are detected via `AXUIElementCreateSystemWide()` and the `kAXMenuBarAttribute` accessibility attribute. Frost polls every 2 seconds to detect changes.
+This is the same technique Ice uses (confirmed in [Ice issue #378](https://github.com/jordanbaird/Ice/issues/378)). No private APIs, no undocumented frameworks — just public `NSStatusItem.length`.
+
+### Persistent State
+
+Hidden and always-hidden item IDs are stored in `UserDefaults` and restored on launch. The polling timer re-scans menu bar items every 2 seconds, and the persisted IDs are matched against detected items to determine visibility.
+
+### Accessibility Permission
+
+Frost uses `AXIsProcessTrustedWithOptions` to check permission on launch. If not granted, it shows an alert with a button that deep-links to `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`. A 5-second monitoring timer detects when permission is granted and automatically refreshes.
+
+### Launch at Login
+
+Uses `SMAppService.mainApp` (macOS 13+) — the modern replacement for the old Login Items approach. Toggle from the menu or Settings > General.
+
+### App Icon
+
+The snowflake icon is generated programmatically via Swift code that draws to an NSImage, then `sips` + `iconutil` convert it to a proper `.icns` file with all required sizes (16x16 through 512x512@2x). See `scripts/generate-icon.sh`.
 
 ### Known Limitations
 
-- **Hiding is state-tracked, not physical**: Frost tracks which items you've marked as "hidden" in its own state. It does not physically collapse other apps' menu bar items (which requires private NSStatusItem APIs). This is a deliberate choice for stability — private APIs break on macOS updates.
+- **Item IDs are position+title based**: If an item changes position or title significantly, its persisted ID may not match on next launch.
 - **Item icons not yet captured**: The Accessibility API exposes titles but not icons reliably across all items.
 - **No drag-to-reorder**: Items are listed in the order the Accessibility API returns them.
 
@@ -95,15 +129,16 @@ frost/
 ├── README.md                        # This file
 ├── LICENSE                          # MIT
 ├── scripts/
-│   └── build-app.sh                 # Build script for .app bundle
+│   ├── build-app.sh                 # Build script for .app bundle with icon
+│   └── generate-icon.sh             # Generate .icns from Swift-drawn snowflake
 ├── Sources/
 │   └── Frost/
 │       ├── FrostApp.swift           # SwiftUI app entry point
-│       ├── FrostDelegate.swift      # App delegate, status items, menu logic, AX scanning
-│       └── FrostSettingsView.swift  # SwiftUI settings window
+│       ├── FrostDelegate.swift      # App delegate, status items, hiding, AX, SMAppService
+│       └── FrostSettingsView.swift  # SwiftUI settings window (3 tabs)
 └── Tests/
     └── FrostTests/
-        └── FrostTests.swift         # Unit tests for state management and item logic
+        └── FrostTests.swift         # 18 unit tests (state, items, persistence, hide/unhide)
 ```
 
 ## Development
@@ -132,11 +167,20 @@ swift test
 swift run
 ```
 
+### Build .app bundle with icon
+
+```bash
+./scripts/build-app.sh
+```
+
 ## Tech Stack
 
 - **Language**: Swift 6.2
 - **UI Framework**: SwiftUI + AppKit (NSStatusItem, NSMenu)
 - **Menu Bar Detection**: Accessibility API (AXUIElement)
+- **Launch at Login**: ServiceManagement (SMAppService)
+- **Persistent State**: UserDefaults
+- **Icon Generation**: sips + iconutil
 - **Package Manager**: Swift Package Manager
 - **Minimum Target**: macOS 14.0 (Sonoma)
 - **Built/Tested On**: macOS 26.5 (Tahoe), Xcode 26.3
@@ -147,10 +191,33 @@ MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-This is a minimal tool built to solve a specific problem (Ice broken on Tahoe). PRs welcome for:
+PRs welcome for:
 
-- Physical item hiding via private APIs (with fallback)
 - Drag-to-reorder support
 - Item icon capture
-- Persistent state (remember hidden items across launches)
-- Launch-at-login support
+- Search/filter in the dropdown
+- Keyboard shortcuts
+- Profiles (save/restore configurations)
+- Rules engine (conditional auto-hide)
+- Sparkle update framework
+- CI/CD via GitHub Actions
+
+## Changelog
+
+### v1.1.0
+- Physical menu bar hiding via wide-item push technique (no private APIs)
+- Persistent state via UserDefaults (hidden/always-hidden item IDs survive restarts)
+- Launch at login via SMAppService
+- Accessibility permission detection with auto-monitoring
+- App icon (.icns) generated programmatically
+- Three-section model (Visible / Hidden / Always Hidden)
+- Tabbed settings window (General / Items / About)
+- 18 unit tests (up from 15)
+
+### v1.0.0
+- Initial release
+- Menu bar item detection via Accessibility API
+- Hide/unhide from dropdown menu
+- Hidden section toggle with chevron
+- SwiftUI settings window
+- 15 unit tests
